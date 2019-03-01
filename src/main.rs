@@ -32,8 +32,11 @@ use redis_async::client;
 extern crate redis;
 use redis::Commands;
 
-use actix_web::{middleware, server, App, HttpRequest, HttpResponse, Json,
-                AsyncResponder, http, Error as AWError};
+use actix_web::{
+    middleware, server, App, HttpRequest, HttpResponse,
+    Json, AsyncResponder, http, Error as AWError,
+    ws,
+};
 
 use futures::future::{Future, join_all};
 use futures::{future, Stream};
@@ -47,13 +50,15 @@ use protobuf::{
 use prost::Message;
 use bytes::{Buf, IntoBuf, BigEndian};
 
+mod websocket;
+use websocket::{ MyWebSocket };
 
 
 
 
 pub struct AppState {
     // pub redis_addr: Arc<Addr<RedisActor>>
-    pub redis_client: Arc<redis::Client>
+    pub redis_client: Arc<redis::Client>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Message)]
@@ -62,6 +67,13 @@ pub struct MyObj {
     pub name: String,
     #[prost(string, tag = "2")]
     pub number: String,
+}
+
+
+/// do websocket handshake and start `MyWebSocket` actor
+pub fn ws_handler(req: &HttpRequest<AppState>) -> Result<HttpResponse, AWError> {
+    let redis_client: Arc<redis::Client> = req.state().redis_client.clone();
+    ws::start(req, MyWebSocket::new(redis_client))
 }
 
 
@@ -237,14 +249,15 @@ fn main() {
 
     server::new(|| {
 
-
         let redis_client = Arc::new(redis::Client::open("redis://127.0.0.1/").unwrap());
-        let app_state = AppState { redis_client };
-
+        let app_state = AppState {
+            redis_client,
+        };
         // Redis
         App::with_state(app_state)
             .middleware(middleware::Logger::default())
             .resource("/", |r| r.method(http::Method::POST).with_async(protobuf_handler))
+            .resource("/ws/", |r| r.method(http::Method::GET).f(ws_handler))
             .resource("/stuff", |r| {
                 r.method(http::Method::POST).with(cache_stuff);
                 // r.method(http::Method::DELETE).f(del_stuff);
