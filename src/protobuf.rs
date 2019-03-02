@@ -1,3 +1,5 @@
+
+use std::collections::HashSet;
 use futures::{Future, Poll, Stream};
 
 use bytes::BytesMut;
@@ -46,7 +48,7 @@ pub struct ProtoBufMessage<U: Message + Default> {
 
 impl<U: Message + Default + 'static> ProtoBufMessage<U> {
     /// Create `ProtoBufMessage` for request.
-    pub fn new(req: HttpRequest<AppState>) -> Self {
+    pub fn new(req: &HttpRequest<AppState>) -> Self {
         // Turns body into byteslice, buffer it, then wrap it in a future
         let fut = req
             .payload() // Message stream: payload() -> Stream<Item=Bytes, Error=PayloadError>
