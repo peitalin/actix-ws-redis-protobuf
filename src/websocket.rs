@@ -54,29 +54,33 @@ impl Actor for MyWebSocket {
     // Init heartbeat
     fn started(&mut self, ctx: &mut ws::WebsocketContext<Self, AppState>) {
         let msg = ListenControl::Subscribe(ctx.address().recipient());
+        debug!("websocket.rs => started()");
         self.listener.do_send(msg).ok();
         self.hb(ctx);
     }
 
     fn stopped(&mut self, ctx: &mut ws::WebsocketContext<Self, AppState>) {
         let msg = ListenControl::Unsubscribe(ctx.address().recipient());
+        debug!("websocket.rs => stopped()");
         self.listener.do_send(msg).ok();
     }
 }
 
 impl Handler<ListenUpdate> for MyWebSocket {
-    type Result = ();
+    type Result = String;
 
     fn handle(&mut self, msg: ListenUpdate, ctx: &mut ws::WebsocketContext<Self, AppState>) -> Self::Result {
         let ListenUpdate(vote) = msg;
+        debug!("\twebsocket.rs => handle -> {:?}\n", &vote);
         if let Ok(data) = serde_json::to_string(&vote) {
             ctx.text(data);
-        }
-
+        };
+        String::from(format!("{:?}", &vote))
     }
 }
 
 impl StreamHandler<ws::Message, ws::ProtocolError> for MyWebSocket {
+
     fn handle(&mut self, msg: ws::Message, ctx: &mut ws::WebsocketContext<Self, AppState>) {
 
         // process websocket

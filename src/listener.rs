@@ -20,7 +20,7 @@ use futures::future::{Future, join_all};
 pub struct ListenUpdate(pub MyObj);
 
 impl Message for ListenUpdate {
-    type Result = ();
+    type Result = String;
 }
 
 //////////////////////////////
@@ -43,13 +43,16 @@ impl Actor for ListenerActor {
 }
 
 impl Handler<ListenUpdate> for ListenerActor {
-    type Result = ();
+    type Result = String;
 
+    // not all listeners
     fn handle(&mut self, msg: ListenUpdate, ctx: &mut Context<Self>) -> Self::Result {
-        println!("no. listeners: {:?}", self.listeners.len());
-        for listener in &self.listeners {
-            listener.send(msg.clone());
+        info!("\n\tlistener.rs => no. listeners: {:?}", self.listeners.len());
+        info!("\tlistener.rs => msg: {:?}\n", &msg);
+        for recipient in &self.listeners {
+            recipient.do_send(msg.clone()).ok();
         };
+        String::from("Message successfully broadcasted to websocket clients")
     }
 }
 
@@ -71,7 +74,7 @@ impl Handler<ListenControl> for ListenerActor {
     fn handle(&mut self, msg: ListenControl, ctx: &mut Self::Context) -> Self::Result {
         match msg {
             ListenControl::Subscribe(listener) => {
-                println!("Client joined");
+                info!("Client joined");
                 self.listeners.insert(listener);
             },
             ListenControl::Unsubscribe(listener) => {

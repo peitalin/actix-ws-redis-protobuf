@@ -13,7 +13,8 @@ extern crate bytes;
 extern crate futures;
 #[macro_use]
 extern crate failure;
-extern crate env_logger;
+#[macro_use]
+extern crate log;
 extern crate pretty_env_logger;
 extern crate prost;
 #[macro_use]
@@ -78,15 +79,6 @@ pub struct MyObj {
 }
 
 
-/// do websocket handshake and start `MyWebSocket` actor
-pub fn ws_handler(req: &HttpRequest<AppState>) -> Result<HttpResponse, AWError> {
-    let redis_client: Arc<redis::Client> = req.state().redis_client.clone();
-    let listener = req.state().listener.clone().recipient();
-    let addr_ws = MyWebSocket::new(redis_client, listener);
-    ws::start(req, addr_ws)
-}
-
-
 
 /// This handler uses `ProtoBufMessage` for loading protobuf object.
 pub fn protobuf_handler(req: &HttpRequest<AppState>) -> impl Future<Item=HttpResponse, Error=AWError> {
@@ -127,39 +119,49 @@ pub fn protobuf_handler(req: &HttpRequest<AppState>) -> impl Future<Item=HttpRes
 
 
 
-fn cache_stuff(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> impl  Future<Item=HttpResponse, Error=AWError> {
+// fn cache_stuff(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> impl  Future<Item=HttpResponse, Error=AWError> {
+//
+//     let (myobj, req) = reqt;
+//     let myobj = myobj.into_inner();
+//
+//     // Serialize using protocul buffers
+//     let mut myobj_buffer = Vec::new();
+//     // encode value, and insert into body vector
+//     myobj.encode(&mut myobj_buffer)
+//         .map_err(|e| ProtoBufPayloadError::Serialize(e)).unwrap();
+//
+//     // REDIS update
+//     let redis_client: Arc<redis::Client> = req.state().redis_client.clone();
+//     let conn = redis_client.get_connection().unwrap();
+//     let redis1: redis::RedisResult<String> = conn.set("name", &myobj.name);
+//     let redis2: redis::RedisResult<String> = conn.set("name", &myobj.name);
+//     let redis3: redis::RedisResult<String> = conn.publish("events", myobj_buffer.clone());
+//
+//     // Websocket broadcast
+//     let listener: Addr<ListenerActor> = req.state().listener.clone();
+//     let update = ListenUpdate(myobj.clone());
+//     let fut = listener.send(update)
+//         .then(move |res| {
+//             println!("{:?}", res);
+//             future::ok(HttpResponse::Ok().content_type("application/json").json(JsonResponse {
+//                 status: String::from("Successfully received and broadcoast msg to websocket clients"),
+//                 request: myobj,
+//                 protobuf_response: None,
+//             }))
+//         });
+//     Box::new(fut)
+// }
 
-    let (myobj, req) = reqt;
-    let myobj = myobj.into_inner();
 
-    // Serialize using protocul buffers
-    let mut myobj_buffer = Vec::new();
-    // encode value, and insert into body vector
-    myobj.encode(&mut myobj_buffer)
-        .map_err(|e| ProtoBufPayloadError::Serialize(e)).unwrap();
 
-    // REDIS update
+
+/// do websocket handshake and start `MyWebSocket` actor
+pub fn ws_handler(req: &HttpRequest<AppState>) -> Result<HttpResponse, AWError> {
     let redis_client: Arc<redis::Client> = req.state().redis_client.clone();
-    let conn = redis_client.get_connection().unwrap();
-    let redis1: redis::RedisResult<String> = conn.set("name", &myobj.name);
-    let redis2: redis::RedisResult<String> = conn.set("name", &myobj.name);
-    let redis3: redis::RedisResult<String> = conn.publish("events", myobj_buffer.clone());
-
-    // Websocket broadcast
-    let listener: Addr<ListenerActor> = req.state().listener.clone();
-    let update = ListenUpdate(myobj.clone());
-    let fut = listener.send(update)
-        .then(move |res| {
-            println!("{:?}", res);
-            future::ok(HttpResponse::Ok().content_type("application/json").json(JsonResponse {
-                status: String::from("Successfully received and broadcoast msg to websocket clients"),
-                request: myobj,
-                protobuf_response: None,
-            }))
-        });
-    Box::new(fut)
+    let listener = req.state().listener.clone().recipient();
+    let addr_ws = MyWebSocket::new(redis_client, listener);
+    ws::start(req, addr_ws)
 }
-
 
 fn new_comment(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> Box<Future<Item=HttpResponse, Error=AWError>> {
 
@@ -169,9 +171,8 @@ fn new_comment(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> Box<Future<Item=Ht
     let update = ListenUpdate(myobj.clone());
     let fut = listener.send(update)
         .then(move |res| {
-            println!("{:?}", res);
             future::ok(HttpResponse::Ok().content_type("application/json").json(JsonResponse {
-                status: String::from("Successfully received and broadcoast msg to websocket clients"),
+                status: String::from(res.unwrap()),
                 request: myobj,
                 protobuf_response: None,
             }))
@@ -193,8 +194,11 @@ struct JsonResponse {
 
 fn main() {
 
-    ::std::env::set_var("RUST_LOG", "actix_web=info,debug,warn");
+    ::std::env::set_var("RUST_LOG", "actix_web=,proto=info,debug,warn,error");
     pretty_env_logger::init();
+    info!("such information");
+    warn!("o_O");
+    error!("much error");
 
     // actix::run(redis_pubsub);
 
