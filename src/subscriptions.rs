@@ -23,7 +23,6 @@ use actix_web::ws;
 use std::collections::HashSet;
 use crate::{ MyObj, AppState };
 use futures::future::{Future, join_all};
-use crate::protobuf::ProtoBufMessage;
 
 
 //////////////////////////////

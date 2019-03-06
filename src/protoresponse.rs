@@ -42,12 +42,12 @@ impl<T: Message> Responder for ProtoBuf<T> {
     }
 }
 
-pub struct ProtoBufMessage<U: Message + Default> {
+pub struct ProtoBufBody<U: Message + Default> {
     fut: Box<Future<Item = U, Error = ProtoBufPayloadError>>,
 }
 
-impl<U: Message + Default + 'static> ProtoBufMessage<U> {
-    /// Create `ProtoBufMessage` for request.
+impl<U: Message + Default + 'static> ProtoBufBody<U> {
+    /// Create `ProtoBufBody` for request.
     pub fn new(req: &HttpRequest<AppState>) -> Self {
         // Turns body into byteslice, buffer it, then wrap it in a future
         let fut = req
@@ -61,13 +61,13 @@ impl<U: Message + Default + 'static> ProtoBufMessage<U> {
             })  // Insert into buffer, then decode Message as value
             .and_then(|body| {
                 Ok(<U>::decode(&mut body.into_buf())?)
-        });
+            });
 
-        ProtoBufMessage { fut: Box::new(fut) }
+        ProtoBufBody { fut: Box::new(fut) }
     }
 }
 
-impl<U: Message + Default + 'static> Future for ProtoBufMessage<U> where {
+impl<U: Message + Default + 'static> Future for ProtoBufBody<U> where {
     type Item = U;
     type Error = ProtoBufPayloadError;
 
@@ -77,11 +77,11 @@ impl<U: Message + Default + 'static> Future for ProtoBufMessage<U> where {
 }
 
 pub trait ProtoBufResponseBuilder {
-    fn protobuf_response<T: Message>(&mut self, value: T) -> Result<HttpResponse, Error>;
+    fn protobuf<T: Message>(&mut self, value: T) -> Result<HttpResponse, Error>;
 }
 
 impl ProtoBufResponseBuilder for HttpResponseBuilder {
-    fn protobuf_response<T: Message>(&mut self, value: T) -> Result<HttpResponse, Error> {
+    fn protobuf<T: Message>(&mut self, value: T) -> Result<HttpResponse, Error> {
         self.header(CONTENT_TYPE, "application/protobuf");
 
         let mut body = Vec::new();

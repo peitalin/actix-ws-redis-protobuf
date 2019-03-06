@@ -46,18 +46,23 @@ import aiohttp
 async def fetch(session):
     obj = test_pb2.MyObj()
     obj.number = "0433678990"
-    obj.name = 'Jade'
-    async with session.post('http://localhost:7070', data=obj.SerializeToString(),
+    obj.name = 'Alicia'
+    async with session.post('http://localhost:7070/ws/stuff', data=obj.SerializeToString(),
         headers={"content-type": "application/protobuf"}) as resp:
-        print("\nfetch in go(loop): ")
+        print("Sent protobuf data to server: ")
+        print(obj)
         print(resp.status)
+
         data = await resp.read()
         receiveObj = test_pb2.MyObj()
         receiveObj.ParseFromString(data)
+        print("Received protobuf response from server + deserialized successfully:")
         print(receiveObj)
+        print("Here's the name: ", receiveObj.name)
+        print("Here's the number: ", receiveObj.number)
 
 async def go(loop):
-    print("\nStart event loop: go(loop): ")
+    print("Start event loop: go(loop): ")
     async with aiohttp.ClientSession(loop=loop) as session:
         await fetch(session)
 

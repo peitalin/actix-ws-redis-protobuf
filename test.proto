@@ -1,0 +1,6 @@
+syntax = "proto3";
+
+message MyObj {
+    string name = 1;
+    string number = 2;
+}
