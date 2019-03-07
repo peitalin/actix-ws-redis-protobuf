@@ -45,7 +45,7 @@ import aiohttp
 
 async def fetch(session):
     obj = test_pb2.MyObj()
-    obj.number = "0433678990"
+    obj.number = 433678990
     obj.name = 'Alicia'
     async with session.post('http://localhost:7070/ws/stuff', data=obj.SerializeToString(),
         headers={"content-type": "application/protobuf"}) as resp:

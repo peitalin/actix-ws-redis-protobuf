@@ -2,8 +2,10 @@
 #![allow(unused_imports)]
 
 extern crate actix;
-extern crate actix_web;
 extern crate actix_redis;
+extern crate actix_protobuf;
+extern crate actix_web;
+
 extern crate bytes;
 extern crate futures;
 #[macro_use]
@@ -21,7 +23,6 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate tokio;
-extern crate actix_protobuf;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -42,7 +43,7 @@ use actix_web::{
 };
 use futures::future::{Future, join_all};
 use futures::{future, Stream};
-use bytes::{Buf, IntoBuf, BytesMut, BigEndian};
+use bytes::{Buf, IntoBuf, BytesMut};
 
 ////////////////////////////////
 // use crate::actix_protobuf::{
@@ -51,17 +52,14 @@ use bytes::{Buf, IntoBuf, BytesMut, BigEndian};
 //     ProtoBufResponseBuilder,
 //     ProtoBuf,
 // };
-mod protoresponse;
-use crate::protoresponse::{
-    ProtoBufPayloadError,
-    ProtoBufBody,
-    ProtoBufResponseBuilder,
-    ProtoBuf,
-};
 
-use prost::Message;
-use actix_web::*;
-use crate::actix_protobuf::*;
+
+use actix_protobuf::{
+    ProtoBuf,
+    ProtoBufMessage,
+    ProtoBufPayloadError,
+    ProtoBufResponseBuilder,
+};
 
 mod websocket;
 use websocket::{ WebSocketActor };
@@ -74,8 +72,6 @@ use subscriptions::{
     BroadcastUpdateProto,
 };
 
-
-
 pub struct AppState {
     pub redis_client: Arc<redis::Client>,
     pub subscriptions: Addr<SubscriptionActor>,
@@ -83,20 +79,18 @@ pub struct AppState {
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Message)]
 pub struct MyObj {
-    #[prost(string, tag="1")]
-    pub name: String,
+    #[prost(int32, tag="1")]
+    pub number: i32,
     #[prost(string, tag="2")]
-    pub number: String,
+    pub name: String,
 }
 
 
-
-// fn index(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> Result<HttpResponse, AWError> {
-//     let (msg, req) = reqt;
-//     println!("model: {:?}", msg);
-//     HttpResponse::Ok().protobuf(msg.0)
-// }
-
+fn index(reqt: (ProtoBuf<MyObj>, HttpRequest<AppState>)) -> Result<HttpResponse, AWError> {
+    let (msg, req) = reqt;
+    println!("model: {:?}", msg);
+    HttpResponse::Ok().protobuf(msg.0)
+}
 
 
 /// do websocket handshake and start `MyWebSocket` actor
@@ -107,71 +101,95 @@ pub fn ws_handshake_handler(req: &HttpRequest<AppState>) -> Result<HttpResponse,
     ws::start(req, addr_ws)
 }
 
+
 /// Handles incoming Protobuf messages, then dispatches to WebSocket clients as binary stream
-pub fn protobuf_handler_ws(req: &HttpRequest<AppState>) -> impl Future<Item=HttpResponse, Error=AWError> {
+pub fn protobuf_handler_ws(reqt: (ProtoBuf<MyObj>, HttpRequest<AppState>)) -> impl Future<Item=Result<HttpResponse, AWError>, Error=AWError> {
+
+    let (msg, req) = reqt;
+    println!("model: {:?}", msg);
 
     let redis_client: Arc<redis::Client> = req.state().redis_client.clone();
     let conn = redis_client.get_connection().unwrap();
     let subscriptions = req.state().subscriptions.clone();
 
-    ProtoBufBody::new(req)
-    .from_err()  // convert all errors into `Error`
-    .and_then(|value: MyObj| {
-        println!("3. model:{:?}\n\t\tname: {:?}\n\t\tnumber: {:?}", value, value.name, value.number);
-        future::ok(HttpResponse::Ok().protobuf(value).unwrap())
-    }).and_then(move |resp: HttpResponse| {
-        match resp.body() {
-            actix_web::Body::Binary(b) => {
-                // b: Binary
-                // take() => convert to Bytes
-                // let buf: Vec<u8> = b.take().into_buf();
-                // let buf: &[u8] = b.as_ref();
-                // create a BroadcastUpdateProto message
-                let broadcast_update = BroadcastUpdateProto(b.to_owned().take());
-                info!("{:?}", broadcast_update);
-                // send the message to SubscriptionActor's handler
-                let fut = subscriptions.do_send(broadcast_update);
-                future::ok(resp)
-            },
-            _ => future::ok(resp),
-        }
-    }).responder() // from: actix_web::AsyncResponder trait
+    let resp = HttpResponse::Ok().protobuf(msg.0);
+    match &resp {
+        Ok(res) => {
+            match res.body() {
+                actix_web::Body::Binary(b) => {
+                    // create a BroadcastUpdateProto message
+                    let broadcast_update = BroadcastUpdateProto(b.to_owned().take());
+                    info!("{:?}", broadcast_update);
+                    // send the message to SubscriptionActor's handler
+                    let fut = subscriptions.do_send(broadcast_update);
+                    Ok(res)
+                },
+                _ => Ok(res)
+            }
+        },
+        Err(e) => Err(e)
+    };
+    future::ok(resp)
+
+
+    // ProtoBufBody::new(req)
+    // .from_err()  // convert all errors into `Error`
+    // .and_then(|value: MyObj| {
+    //     println!("3. model:{:?}\n\t\tname: {:?}\n\t\tnumber: {:?}", value, value.name, value.number);
+    //     future::ok(HttpResponse::Ok().protobuf(value).unwrap())
+    // }).and_then(move |resp: HttpResponse| {
+    //     match resp.body() {
+    //         actix_web::Body::Binary(b) => {
+    //             // b: Binary
+    //             // take() => convert to Bytes
+    //             // let buf: Vec<u8> = b.take().into_buf();
+    //             // let buf: &[u8] = b.as_ref();
+    //             // create a BroadcastUpdateProto message
+    //             let broadcast_update = BroadcastUpdateProto(b.to_owned().take());
+    //             info!("{:?}", broadcast_update);
+    //             // send the message to SubscriptionActor's handler
+    //             let fut = subscriptions.do_send(broadcast_update);
+    //             future::ok(resp)
+    //         },
+    //         _ => future::ok(resp),
+    //     }
+    // }).responder() // from: actix_web::AsyncResponder trait
 }
 
-/// Handles incoming JSON messages from GET, then dispatches to WebSocket clients as binary stream
-fn json_handler_ws(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> impl Future<Item=HttpResponse, Error=AWError> {
-
-    let (myobj, req) = reqt;
-    let myobj = myobj.into_inner();
-    let subscriptions = req.state().subscriptions.clone();
-
-    // REDIS update
-    let redis_client: Arc<redis::Client> = req.state().redis_client.clone();
-    let conn = redis_client.get_connection().unwrap();
-    let redis1: redis::RedisResult<String> = conn.set("name", &myobj.name);
-    let redis2: redis::RedisResult<String> = conn.set("number", &myobj.number);
-    let redis3: redis::RedisResult<String> = conn.publish("events", &myobj.name);
-
-    ProtoBufBody::new(&req)
-    .from_err()  // convert all errors into `Error`
-    .and_then(move |value: MyObj| {
-        println!("3. model:{:?}\n\t\tname: {:?}\n\t\tnumber: {:?}", value, value.name, value.number);
-        future::ok(HttpResponse::Ok().protobuf(myobj).unwrap())
-    }).and_then(move |resp: HttpResponse| {
-        match resp.body() {
-            actix_web::Body::Binary(b) => {
-                // b: Binary
-                // take() => convert to Bytes
-                let broadcast_update = BroadcastUpdateProto(b.to_owned().take());
-                info!("{:?}", broadcast_update);
-                // send the message to SubscriptionActor's handler
-                let fut = subscriptions.do_send(broadcast_update);
-                future::ok(resp)
-            },
-            _ => future::ok(resp),
-        }
-    }).responder()
-}
+// /// Handles incoming JSON messages from GET, then dispatches to WebSocket clients as binary stream
+// fn json_handler_ws(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> impl Future<Item=HttpResponse, Error=AWError> {
+//
+//     let (myobj, req) = reqt;
+//     let myobj = myobj.into_inner();
+//     let subscriptions = req.state().subscriptions.clone();
+//
+//     // REDIS update
+//     let redis_client: Arc<redis::Client> = req.state().redis_client.clone();
+//     let conn = redis_client.get_connection().unwrap();
+//     let redis1: redis::RedisResult<String> = conn.set("name", &myobj.name);
+//     let redis2: redis::RedisResult<String> = conn.set("number", &myobj.number);
+//     let redis3: redis::RedisResult<String> = conn.publish("events", &myobj.name);
+//
+//     ProtoBufBody::new(&req)
+//     .from_err()  // convert all errors into `Error`
+//     .and_then(move |value: MyObj| {
+//         println!("3. model:{:?}\n\t\tname: {:?}\n\t\tnumber: {:?}", value, value.name, value.number);
+//         future::ok(HttpResponse::Ok().protobuf(myobj).unwrap())
+//     }).and_then(move |resp: HttpResponse| {
+//         match resp.body() {
+//             actix_web::Body::Binary(b) => {
+//                 // b: Binary
+//                 // take() => convert to Bytes
+//                 let broadcast_update = BroadcastUpdateProto(b.to_owned().take());
+//                 info!("{:?}", broadcast_update);
+//                 // send the message to SubscriptionActor's handler
+//                 let fut = subscriptions.do_send(broadcast_update);
+//                 future::ok(resp)
+//             },
+//             _ => future::ok(resp),
+//         }
+//     }).responder()
+// }
 
 
 
@@ -224,12 +242,12 @@ fn main() {
         App::with_state(app_state)
             .middleware(middleware::Logger::default())
             .resource("/ws/", |r| r.method(http::Method::GET).f(ws_handshake_handler))
-            .resource("/ws/stuff", |r| r.method(http::Method::POST).a(protobuf_handler_ws))
-            // .resource("/", |r| r.method(http::Method::POST).with(index))
+            .resource("/ws/stuff", |r| r.method(http::Method::POST).with_async(protobuf_handler_ws))
+            // .resource("/ws/stuff", |r| r.method(http::Method::POST).with(index))
             // a.() -> async.
             .resource("/stuff", |r| {
                 // r.method(http::Method::POST).with_async(json_handler);
-                r.method(http::Method::POST).with_async(json_handler_ws);
+                // r.method(http::Method::POST).with_async(json_handler_ws);
                 // r.method(http::Method::DELETE).f(del_stuff);
                 // r.method(http::Method::GET).f(get_stuff);
             })
