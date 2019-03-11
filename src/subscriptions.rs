@@ -69,7 +69,7 @@ impl Handler<BroadcastUpdate> for SubscriptionActor {
     type Result = String;
 
     fn handle(&mut self, msg: BroadcastUpdate, ctx: &mut Context<Self>) -> Self::Result {
-        debug!("no. listeners: {:?}", &self.subscribers.len());
+        debug!("no. listeners BroadcastUpdate: {:?}", &self.subscribers.len());
         debug!("msg: {:?}", &msg.0);
         for recipient in &self.subscribers {
             recipient.do_send(msg.clone()).ok();
@@ -100,8 +100,12 @@ impl Handler<BroadcastUpdateProto> for SubscriptionActor {
 //////////////////////////////
 
 pub enum SubscribeOnOff {
+    // For clients receiving JSON over websockets
     Subscribe(Recipient<BroadcastUpdate>),
     Unsubscribe(Recipient<BroadcastUpdate>),
+    // For Protobuf Websocket clients
+    SubscribeProto(Recipient<BroadcastUpdateProto>),
+    UnsubscribeProto(Recipient<BroadcastUpdateProto>),
 }
 impl Message for SubscribeOnOff {
     type Result = ();
@@ -118,33 +122,15 @@ impl Handler<SubscribeOnOff> for SubscriptionActor {
             SubscribeOnOff::Unsubscribe(addr) => {
                 debug!("Client left");
                 self.subscribers.remove(&addr);
-            }
-        }
-    }
-}
-
-pub enum SubscribeOnOffProto {
-    Subscribe(Recipient<BroadcastUpdateProto>),
-    Unsubscribe(Recipient<BroadcastUpdateProto>),
-}
-impl Message for SubscribeOnOffProto {
-    type Result = ();
-}
-impl Handler<SubscribeOnOffProto> for SubscriptionActor {
-    type Result = ();
-
-    fn handle(&mut self, msg: SubscribeOnOffProto, ctx: &mut Self::Context) -> Self::Result {
-        match msg {
-            SubscribeOnOffProto::Subscribe(addr) => {
+            },
+            SubscribeOnOff::SubscribeProto(addr) => {
                 debug!("Client joined proto");
                 self.subscribers_proto.insert(addr);
             },
-            SubscribeOnOffProto::Unsubscribe(addr) => {
+            SubscribeOnOff::UnsubscribeProto(addr) => {
                 debug!("Client left proto");
                 self.subscribers_proto.remove(&addr);
             }
         }
     }
 }
-
-

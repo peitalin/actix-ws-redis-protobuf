@@ -18,7 +18,6 @@ use crate::{AppState, MyObj};
 use crate::subscriptions::{
     SubscriptionActor,
     SubscribeOnOff,
-    SubscribeOnOffProto,
     BroadcastUpdate,
     BroadcastUpdateProto,
 };
@@ -33,11 +32,11 @@ pub struct WebSocketActor {
     // Client needs to send ping every 20 secs at least
     hb: Instant,
     redis_client: Arc<redis::Client>,
-    subscriptions: Recipient<SubscribeOnOffProto>,
+    subscriptions: Recipient<SubscribeOnOff>,
 }
 
 impl WebSocketActor {
-    pub fn new(subscriptions: Recipient<SubscribeOnOffProto>, redis_client: Arc<redis::Client>) -> Self {
+    pub fn new(subscriptions: Recipient<SubscribeOnOff>, redis_client: Arc<redis::Client>) -> Self {
         Self {
             hb: Instant::now(),
             redis_client: redis_client,
@@ -63,21 +62,21 @@ impl Actor for WebSocketActor {
 
     // Init heartbeat
     fn started(&mut self, ctx: &mut ws::WebsocketContext<Self, AppState>) {
-        // let msg = SubscribeOnOff::Subscribe(ctx.address().recipient());
-        // self.subscriptions.do_send(msg).ok();
-
-        let msg = SubscribeOnOffProto::Subscribe(ctx.address().recipient());
+        let msg = SubscribeOnOff::Subscribe(ctx.address().recipient());
         self.subscriptions.do_send(msg).ok();
         // do_send(msg) to Recipient<SubscribeOnOff>
+        let msg_pb = SubscribeOnOff::SubscribeProto(ctx.address().recipient());
+        self.subscriptions.do_send(msg_pb).ok();
+
         self.hb(ctx);
     }
 
     fn stopped(&mut self, ctx: &mut ws::WebsocketContext<Self, AppState>) {
-        // let msg = SubscribeOnOff::Unsubscribe(ctx.address().recipient());
-        // self.subscriptions.do_send(msg).ok();
-
-        let msg = SubscribeOnOffProto::Unsubscribe(ctx.address().recipient());
+        let msg = SubscribeOnOff::Unsubscribe(ctx.address().recipient());
         self.subscriptions.do_send(msg).ok();
+
+        let msg_pb = SubscribeOnOff::UnsubscribeProto(ctx.address().recipient());
+        self.subscriptions.do_send(msg_pb).ok();
     }
 }
 
@@ -89,7 +88,7 @@ impl Handler<BroadcastUpdate> for WebSocketActor {
 
     fn handle(&mut self, msg: BroadcastUpdate, ctx: &mut ws::WebsocketContext<Self, AppState>) -> Self::Result {
         let BroadcastUpdate(vote) = msg;
-        debug!("WebSocketActor => handle -> {:?}", &vote);
+        debug!("WebSocketActor => handle BroadcastUpdate -> {:?}", &vote);
         if let Ok(data) = serde_json::to_string(&vote) {
             ctx.text(data); // Send data as text() via websocket
         };
@@ -104,16 +103,10 @@ impl Handler<BroadcastUpdateProto> for WebSocketActor {
         // Handle BroadcastUpdateProto binary message here
         let BroadcastUpdateProto(b) = msg;
         // let buf: &[u8] = b.as_ref();
-        debug!("WebSocketActor => handle -> {:?}", &b);
-
-        // if let Message::Binary(ref b) = msg {
-        //   let response = Response::decode(v);
-        // }
-
+        debug!("WebSocketActor => handle BroadcastUpdateProto -> {:?}", &b);
         ctx.binary(b.clone());
         String::from(format!("{:?}", b))
     }
-
 }
 
 

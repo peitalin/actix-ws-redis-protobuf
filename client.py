@@ -15,57 +15,81 @@ import sys
 
 import asyncio
 import aiohttp
+import requests
 
-# def op():
-#     try:
-#         obj = test_pb2.MyObj()
-#         obj.number = 433678990
-#         obj.name = 'Jade'
-#         print("\nop: ")
+
+# async def go(loop):
+#     print("Start event loop: go(loop): ")
+#     async with aiohttp.ClientSession(loop=loop) as session:
+#         await post_protobuf(session)
 #
-#         #Serialize
-#         sendDataStr = obj.SerializeToString()
-#         #print serialized string value
-#         print('serialized string:', sendDataStr)
-#         #------------------------#
-#         #  message transmission  #
-#         #------------------------#
-#         receiveDataStr = sendDataStr
-#         receiveData = test_pb2.MyObj()
+# async def post_protobuf(session):
 #
-#         #Deserialize
-#         receiveData.ParseFromString(receiveDataStr)
-#         print('pares serialize string, return: devId = ', receiveData.number, ', name = ', receiveData.name)
-#     except(Exception, e):
-#         print(Exception, ':', e)
-#         print(traceback.print_exc())
-#         errInfo = sys.exc_info()
-#         print(errInfo[0], ':', errInfo[1])
+#     obj = test_pb2.MyObj()
+#     obj.number = 433678990
+#     obj.name = 'Alicia'
+#
+#     async with session.post('http://localhost:7070/ws/pb/pb/stuff',
+#         data=obj.SerializeToString(),
+#         headers={"content-type": "application/protobuf"}) as resp:
+#
+#         print("Sent protobuf data to server: ")
+#         print(obj)
+#         print(resp.status)
+#
+#         data = await resp.read()
+#         receiveObj = test_pb2.MyObj()
+#         receiveObj.ParseFromString(data)
+#         print("Received protobuf response from server + deserialized successfully:")
+#         print(receiveObj)
+#         print("Here's the name: ", receiveObj.name)
+#         print("Here's the number: ", receiveObj.number)
+#
+#
+# loop = asyncio.get_event_loop()
+# loop.run_until_complete(go(loop))
+# loop.close()
 
 
-async def fetch(session):
-    obj = test_pb2.MyObj()
-    obj.number = 433678990
-    obj.name = 'Alicia'
-    async with session.post('http://localhost:7070/ws/stuff', data=obj.SerializeToString(),
-        headers={"content-type": "application/protobuf"}) as resp:
-        print("Sent protobuf data to server: ")
-        print(obj)
-        print(resp.status)
+# In: Json
+# Out: Json to websocket clients
+print("\nSent: JSON, broadcast JSON to websocket clients")
+requests.post(
+    "http://127.0.0.1:7070/ws/json/json/stuff",
+    json={"name": "Jennifer", "number": 288000111}
+).json()
 
-        data = await resp.read()
-        receiveObj = test_pb2.MyObj()
-        receiveObj.ParseFromString(data)
-        print("Received protobuf response from server + deserialized successfully:")
-        print(receiveObj)
-        print("Here's the name: ", receiveObj.name)
-        print("Here's the number: ", receiveObj.number)
+# In: Json
+# Out: Protobuf to websocket clients
+print("\nSent: JSON, broadcast Protobuf to websocket clients")
+resp2 = requests.post(
+    "http://127.0.0.1:7070/ws/json/pb/stuff",
+    json={"name": "Belle", "number": 422222222}
+)
 
-async def go(loop):
-    print("Start event loop: go(loop): ")
-    async with aiohttp.ClientSession(loop=loop) as session:
-        await fetch(session)
 
-loop = asyncio.get_event_loop()
-loop.run_until_complete(go(loop))
-loop.close()
+
+print("Sent: JSON, broadcast Protobuf to websocket clients")
+send_obj = test_pb2.MyObj()
+send_obj.number = 433678990
+send_obj.name = 'Alicia'
+
+# In: Protobuf
+# Out: Protobuf to websocket clients
+resp = requests.post(
+    "http://127.0.0.1:7070/ws/pb/pb/stuff",
+    headers={ 'content-type': 'application/protobuf' },
+    data=send_obj.SerializeToString(),
+)
+
+print("\nSent protobuf data to server: ")
+print(send_obj)
+print(resp)
+
+data = resp.content
+receiveObj = test_pb2.MyObj()
+receiveObj.ParseFromString(data)
+print("Received protobuf response from server + deserialized successfully:")
+print("Here's the name: ", receiveObj.name)
+print("Here's the number: ", receiveObj.number)
+
