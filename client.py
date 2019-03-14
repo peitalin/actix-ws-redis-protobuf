@@ -53,7 +53,6 @@ import requests
 
 # In: Json
 # Out: Json to websocket clients
-print("\nSent: JSON, broadcast JSON to websocket clients")
 requests.post(
     "http://127.0.0.1:7070/ws/json/json/stuff",
     json={"name": "Jennifer", "number": 288000111}
@@ -61,12 +60,10 @@ requests.post(
 
 # In: Json
 # Out: Protobuf to websocket clients
-print("\nSent: JSON, broadcast Protobuf to websocket clients")
-resp2 = requests.post(
+requests.post(
     "http://127.0.0.1:7070/ws/json/pb/stuff",
     json={"name": "Belle", "number": 422222222}
-)
-
+).json()
 
 
 print("Sent: JSON, broadcast Protobuf to websocket clients")
