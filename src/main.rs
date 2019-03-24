@@ -5,8 +5,8 @@ extern crate actix;
 extern crate actix_redis;
 extern crate actix_protobuf;
 extern crate actix_web;
-
 extern crate bytes;
+
 extern crate futures;
 #[macro_use]
 extern crate failure;
@@ -21,38 +21,46 @@ extern crate redis_async;
 #[macro_use]
 extern crate serde;
 #[macro_use]
+extern crate serde_json;
+#[macro_use]
 extern crate serde_derive;
+extern crate sysinfo;
 extern crate tokio;
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
 
-use redis_async::resp::{ RespValue, FromResp };
-use redis_async::client;
-use redis::Commands;
 
-use actix_redis::{Command, RedisActor, Error as ARError};
+use actix_redis::{Command, RedisActor};
 use actix::prelude::{
     Message as AMessage,
     Addr, Actor, Recipient,
 };
 use actix_web::{
-    middleware, server, App, HttpRequest, HttpResponse,
-    Json, AsyncResponder, http, Error as AWError,
-    HttpMessage, ws,
+    dev,
+    error,
+    http,
+    middleware,
+    middleware::cors::Cors,
+    multipart,
+    server,
+    ws,
+    App, AsyncResponder,
+    Error,
+    Either,
+    FutureResponse,
+    HttpRequest, HttpResponse, HttpMessage,
+    Json,
 };
-use futures::future::{Future, join_all};
-use futures::{future, Stream};
 use bytes::{Buf, IntoBuf, BytesMut};
+use futures::future::{Future, join_all};
+use futures::{future, stream, Stream};
 
-////////////////////////////////
-// use crate::actix_protobuf::{
-//     ProtoBufPayloadError,
-//     ProtoBufBody,
-//     ProtoBufResponseBuilder,
-//     ProtoBuf,
-// };
+use redis_async::resp::{ RespValue, FromResp };
+use redis_async::client;
+use redis::Commands;
 
+use std::sync::Arc;
+use std::io::Read;
+use std::io::Write;
 
 use actix_protobuf::{
     ProtoBuf,
@@ -88,7 +96,7 @@ pub struct MyObj {
 
 
 /// do websocket handshake and start `MyWebSocket` actor
-pub fn ws_handshake_handler(req: &HttpRequest<AppState>) -> Result<HttpResponse, AWError> {
+pub fn ws_handshake_handler(req: &HttpRequest<AppState>) -> Result<HttpResponse, Error> {
     let redis_client: Arc<redis::Client> = req.state().redis_client.clone();
     let subscriptions = req.state().subscriptions.clone().recipient();
     let addr_ws = WebSocketActor::new(subscriptions, redis_client);
@@ -97,7 +105,7 @@ pub fn ws_handshake_handler(req: &HttpRequest<AppState>) -> Result<HttpResponse,
 
 
 /// Handles incoming Protobuf messages, then dispatches to WebSocket clients as binary stream
-pub fn protobuf_to_protobuf_ws(reqt: (ProtoBuf<MyObj>, HttpRequest<AppState>)) -> impl Future<Item=Result<HttpResponse, AWError>, Error=AWError> {
+pub fn protobuf_to_protobuf_ws(reqt: (ProtoBuf<MyObj>, HttpRequest<AppState>)) -> impl Future<Item=Result<HttpResponse, Error>, Error=Error> {
 
     let (msg, req) = reqt;
     println!("model: {:?}", msg);
@@ -123,7 +131,7 @@ pub fn protobuf_to_protobuf_ws(reqt: (ProtoBuf<MyObj>, HttpRequest<AppState>)) -
 }
 
 /// Handles incoming JSON messages from GET, then dispatches to WebSocket clients as binary stream
-fn json_to_protobuf_ws(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> impl Future<Item=HttpResponse, Error=AWError> {
+fn json_to_protobuf_ws(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> impl Future<Item=HttpResponse, Error=Error> {
 
     let (myobj, req) = reqt;
     let myobj = myobj.into_inner();
@@ -139,7 +147,7 @@ fn json_to_protobuf_ws(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> impl Futur
     // serialize MyObj into protobuf
     let resp = HttpResponse::Ok().protobuf(myobj.clone());
     let pbuf_resp = match &resp {
-        Err(e) => None,
+        Err(_e) => None,
         Ok(res) => {
             match res.body() {
                 actix_web::Body::Binary(b) => {
@@ -147,7 +155,7 @@ fn json_to_protobuf_ws(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> impl Futur
                     let broadcast_update = BroadcastUpdateProto(b.clone().take());
                     info!("{:?}", broadcast_update);
                     // send the message to SubscriptionActor's handler
-                    let fut = subscriptions.do_send(broadcast_update);
+                    let _fut = subscriptions.do_send(broadcast_update);
                     Some(b.to_owned().take().to_vec())
                 },
                 _ => None,
@@ -162,7 +170,7 @@ fn json_to_protobuf_ws(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> impl Futur
 }
 
 
-fn json_to_json_ws(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> Box<Future<Item=HttpResponse, Error=AWError>> {
+fn json_to_json_ws(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> Box<Future<Item=HttpResponse, Error=Error>> {
     let (_myobj, req) = reqt;
     let myobj = _myobj.into_inner();
 
@@ -188,43 +196,168 @@ struct JsonResponse {
 
 
 
-fn main() {
 
-    ::std::env::set_var("RUST_LOG", "actix_web=error,proto");
+
+pub fn upload(req: HttpRequest<AppState>) -> FutureResponse<HttpResponse> {
+    Box::new(
+        req.multipart()
+            .map_err(error::ErrorInternalServerError)
+            .map(handle_multipart_item)
+            .flatten()
+            .collect()
+            .map(|sizes| HttpResponse::Ok().json(sizes))
+            .map_err(|e| {
+                error!("failed: {}", e);
+                e
+            }),
+    )
+}
+
+
+pub fn save_file(
+    field: multipart::Field<dev::Payload>,
+) -> Box<Future<Item = i64, Error = Error>> {
+
+    let content_disposition = &field.content_disposition();
+    info!("content_disposition: {:?}", &content_disposition);
+
+    let file_path_string = match content_disposition {
+        Some(f) => {
+            match f.get_filename() {
+                Some(filename) => filename,
+                None => "text.txt",
+            }
+        },
+        None => "temp.txt"
+    };
+    let file = match std::fs::File::create(format!("dat/{}", &file_path_string)) {
+        Ok(file) => file,
+        Err(e) => return Box::new(future::err(error::ErrorInternalServerError(e))),
+    };
+
+    let mut stdin = match std::process::Command::new("gsutil")
+        .arg("cp")
+        .arg("-")
+        .arg(format!("gs://electric-assets/{}", &file_path_string))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn() {
+            Err(why) => panic!("Error spawning command `gsutil`: {:?}", why),
+            Ok(process) => process.stdin.unwrap(),
+        };
+
+    let ffield = field.fold(0i64, move |acc, bytes| {
+        let rt = stdin
+            .write_all(bytes.as_ref())
+            .map(|_| acc + bytes.len() as i64)
+            .map_err(|e| {
+                error!("file.write_all failed: {:?}", e);
+                error::MultipartError::Payload(error::PayloadError::Io(e))
+            });
+        future::result(rt)
+    })
+    .map_err(|e| {
+        error!("save_file failed, {:?}", e);
+        error::ErrorInternalServerError(e)
+    });
+    Box::new(ffield)
+}
+
+pub fn handle_multipart_item(
+    item: multipart::MultipartItem<dev::Payload>,
+) -> Box<Stream<Item = i64, Error = Error>> {
+    match item {
+        multipart::MultipartItem::Field(field) => {
+            debug!("field: {:?}", &field);
+            Box::new(save_file(field).into_stream())
+        },
+        multipart::MultipartItem::Nested(mp) => {
+            Box::new(
+                mp.map_err(error::ErrorInternalServerError)
+                    .map(handle_multipart_item)
+                    .flatten(),
+            )
+        }
+    }
+}
+
+
+
+fn stream_to_gcloud(bytestream: &[u8], destination: &str) {
+    let process = match std::process::Command::new("gsutil")
+        .arg("cp")
+        .arg("-")
+        .arg(destination)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn() {
+            Err(why) => panic!("Error spawning command `gsutil`: {:?}", why),
+            Ok(process) => process,
+        };
+
+    match process.stdin.unwrap().write_all(bytestream) {
+        Err(why) => panic!("Error: piping stream to `| gsutil cp - {}`:\t{:?}", &destination, why),
+        Ok(s) => println!("Success: Piped stream to `| gsutil cp - {}`:\t{:?}", &destination, s),
+    }
+
+    let mut s = String::new();
+    match process.stdout.unwrap().read_to_string(&mut s) {
+        Err(why) => panic!("Could read `| gsutil cp - {}` stdout: {}", &destination, why),
+        Ok(_) => println!("`| gsutil cp - {}` responded with: {:?}", &destination, s),
+    }
+}
+
+
+fn main() {
+    ::std::env::set_var("RUST_LOG", "actix_web=debug,proto");
     pretty_env_logger::init();
 
+    stream_to_gcloud("to be or not to be?".as_ref(), "gs://electric-assets/hamlet.txt");
+
     let sys = actix::System::new("protobuf-example");
-
-    let addr = server::new(|| {
-
+    server::new(|| {
         let redis_client = Arc::new(redis::Client::open("redis://127.0.0.1/").unwrap());
         let subscriptions = SubscriptionActor::new().start();
         let app_state = AppState {
             redis_client,
             subscriptions,
         };
-        // Redis
+
         App::with_state(app_state)
             .middleware(middleware::Logger::default())
-            .resource("/ws/", |r| r.method(http::Method::GET).f(ws_handshake_handler))
-            .resource("/ws/pb/pb/stuff", |r| r.method(http::Method::POST).with_async(protobuf_to_protobuf_ws))
-            .resource("/ws/json/pb/stuff", |r| r.method(http::Method::POST).with_async(json_to_protobuf_ws))
-            // a.() -> async.
-            .resource("/ws/json/json/stuff", |r| {
-                r.method(http::Method::POST).with_async(json_to_json_ws);
-            })
+            .configure(|app| {
+                Cors::for_app(app)
+                    .allowed_origin("http://localhost:9000")
+                    .allowed_origin("http://127.0.0.1:9000")
+                    .allowed_origin("http://localhost:8080")
+                    .allowed_origin("http://127.0.0.1:8080")
+                    .allowed_origin("exp://10.0.0.60:19000")
+                    .allowed_methods(vec!["GET", "POST"])
+                    .allowed_headers(vec![
+                        http::header::ACCEPT,
+                        http::header::CONTENT_TYPE,
+                        http::header::AUTHORIZATION,
+                    ])
+                    .resource("/ws/", |r| r.method(http::Method::GET).f(ws_handshake_handler))
+                    .resource("/ws/pb/pb/stuff", |r| r.method(http::Method::POST).with_async(protobuf_to_protobuf_ws))
+                    .resource("/ws/json/pb/stuff", |r| r.method(http::Method::POST).with_async(json_to_protobuf_ws))
+                    // a.() -> async.
+                    .resource("/ws/json/json/stuff", |r| {
+                        r.method(http::Method::POST).with_async(json_to_json_ws);
+                    })
+                    .resource("/images", |r| r.method(http::Method::POST).with(upload))
 
+                    .register()
+            })
     }).bind("127.0.0.1:7070")
     .unwrap()
-    .shutdown_timeout(1)
-    .workers(1) // 1 worker, otherwise it splits requests
+    .workers(1)
     .start();
 
-    println!("Started http server: 127.0.0.1:7070");
+    println!("Started http server: http://127.0.0.1:7070");
 
     let _ = sys.run();
 }
-
 
 
 
