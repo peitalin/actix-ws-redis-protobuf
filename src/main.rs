@@ -37,6 +37,7 @@ use actix::prelude::{
 use actix_web::{
     dev,
     error,
+    error::MultipartError,
     http,
     middleware,
     middleware::cors::Cors,
@@ -71,7 +72,6 @@ use actix_protobuf::{
 
 mod websocket;
 use websocket::{ WebSocketActor };
-
 mod subscriptions;
 use subscriptions::{
     SubscriptionActor,
@@ -79,6 +79,9 @@ use subscriptions::{
     BroadcastUpdate,
     BroadcastUpdateProto,
 };
+mod multipart_raw;
+use multipart_raw::upload;
+
 
 pub struct AppState {
     pub redis_client: Arc<redis::Client>,
@@ -110,8 +113,8 @@ pub fn protobuf_to_protobuf_ws(reqt: (ProtoBuf<MyObj>, HttpRequest<AppState>)) -
     let (msg, req) = reqt;
     println!("model: {:?}", msg);
 
-    let redis_client: Arc<redis::Client> = req.state().redis_client.clone();
-    let conn = redis_client.get_connection().unwrap();
+    // let _redis_client: Arc<redis::Client> = req.state().redis_client.clone();
+    // let _conn = redis_client.get_connection().unwrap();
     let subscriptions = req.state().subscriptions.clone();
 
     let resp = HttpResponse::Ok().protobuf(msg.0);
@@ -122,7 +125,7 @@ pub fn protobuf_to_protobuf_ws(reqt: (ProtoBuf<MyObj>, HttpRequest<AppState>)) -
                 let broadcast_update = BroadcastUpdateProto(b.to_owned().take());
                 info!("{:?}", broadcast_update);
                 // send the message to SubscriptionActor's handler
-                let fut = subscriptions.do_send(broadcast_update);
+                let _fut = subscriptions.do_send(broadcast_update);
             },
             _ => (),
         }
@@ -140,9 +143,9 @@ fn json_to_protobuf_ws(reqt: (Json<MyObj>, HttpRequest<AppState>)) -> impl Futur
     // REDIS update
     let redis_client: Arc<redis::Client> = req.state().redis_client.clone();
     let conn = redis_client.get_connection().unwrap();
-    let redis1: redis::RedisResult<String> = conn.set("name", &myobj.name);
-    let redis2: redis::RedisResult<String> = conn.set("number", &myobj.number.to_string());
-    let redis3: redis::RedisResult<String> = conn.publish("events", &myobj.name);
+    let _redis1: redis::RedisResult<String> = conn.set("name", &myobj.name);
+    let _redis2: redis::RedisResult<String> = conn.set("number", &myobj.number.to_string());
+    let _redis3: redis::RedisResult<String> = conn.publish("events", &myobj.name);
 
     // serialize MyObj into protobuf
     let resp = HttpResponse::Ok().protobuf(myobj.clone());
@@ -198,121 +201,15 @@ struct JsonResponse {
 
 
 
-pub fn upload(req: HttpRequest<AppState>) -> FutureResponse<HttpResponse> {
-    Box::new(
-        req.multipart()
-            .map_err(error::ErrorInternalServerError)
-            .map(handle_multipart_item)
-            .flatten()
-            .collect()
-            .map(|sizes| HttpResponse::Ok().json(sizes))
-            .map_err(|e| {
-                error!("failed: {}", e);
-                e
-            }),
-    )
-}
 
 
-pub fn save_file(
-    field: multipart::Field<dev::Payload>,
-) -> Box<Future<Item = i64, Error = Error>> {
-
-    let content_disposition = &field.content_disposition();
-    info!("content_disposition: {:?}", &content_disposition);
-
-    let file_path_string = match content_disposition {
-        Some(f) => {
-            match f.get_filename() {
-                Some(filename) => filename,
-                None => "text.txt",
-            }
-        },
-        None => "temp.txt"
-    };
-    let file = match std::fs::File::create(format!("dat/{}", &file_path_string)) {
-        Ok(file) => file,
-        Err(e) => return Box::new(future::err(error::ErrorInternalServerError(e))),
-    };
-
-    let mut stdin = match std::process::Command::new("gsutil")
-        .arg("cp")
-        .arg("-")
-        .arg(format!("gs://electric-assets/{}", &file_path_string))
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn() {
-            Err(why) => panic!("Error spawning command `gsutil`: {:?}", why),
-            Ok(process) => process.stdin.unwrap(),
-        };
-
-    let ffield = field.fold(0i64, move |acc, bytes| {
-        let rt = stdin
-            .write_all(bytes.as_ref())
-            .map(|_| acc + bytes.len() as i64)
-            .map_err(|e| {
-                error!("file.write_all failed: {:?}", e);
-                error::MultipartError::Payload(error::PayloadError::Io(e))
-            });
-        future::result(rt)
-    })
-    .map_err(|e| {
-        error!("save_file failed, {:?}", e);
-        error::ErrorInternalServerError(e)
-    });
-    Box::new(ffield)
-}
-
-pub fn handle_multipart_item(
-    item: multipart::MultipartItem<dev::Payload>,
-) -> Box<Stream<Item = i64, Error = Error>> {
-    match item {
-        multipart::MultipartItem::Field(field) => {
-            debug!("field: {:?}", &field);
-            Box::new(save_file(field).into_stream())
-        },
-        multipart::MultipartItem::Nested(mp) => {
-            Box::new(
-                mp.map_err(error::ErrorInternalServerError)
-                    .map(handle_multipart_item)
-                    .flatten(),
-            )
-        }
-    }
-}
-
-
-
-fn stream_to_gcloud(bytestream: &[u8], destination: &str) {
-    let process = match std::process::Command::new("gsutil")
-        .arg("cp")
-        .arg("-")
-        .arg(destination)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn() {
-            Err(why) => panic!("Error spawning command `gsutil`: {:?}", why),
-            Ok(process) => process,
-        };
-
-    match process.stdin.unwrap().write_all(bytestream) {
-        Err(why) => panic!("Error: piping stream to `| gsutil cp - {}`:\t{:?}", &destination, why),
-        Ok(s) => println!("Success: Piped stream to `| gsutil cp - {}`:\t{:?}", &destination, s),
-    }
-
-    let mut s = String::new();
-    match process.stdout.unwrap().read_to_string(&mut s) {
-        Err(why) => panic!("Could read `| gsutil cp - {}` stdout: {}", &destination, why),
-        Ok(_) => println!("`| gsutil cp - {}` responded with: {:?}", &destination, s),
-    }
-}
 
 
 fn main() {
     ::std::env::set_var("RUST_LOG", "actix_web=debug,proto");
     pretty_env_logger::init();
 
-    stream_to_gcloud("to be or not to be?".as_ref(), "gs://electric-assets/hamlet.txt");
+    // stream_to_gcloud("to be or not to be?".as_ref(), "gs://electric-assets/hamlet.txt");
 
     let sys = actix::System::new("protobuf-example");
     server::new(|| {
