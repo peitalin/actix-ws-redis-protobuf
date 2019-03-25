@@ -30,12 +30,12 @@ use crate::AppState;
 pub fn save_file(
     file_path: String,
     field: multipart::Field<dev::Payload>,
-) -> Box<Future<Item = i64, Error = Error>> {
+) -> Box<Future<Item = (String, i64), Error = Error>> {
 
     let mut stdin = match std::process::Command::new("gsutil")
         .arg("cp")
         .arg("-")
-        .arg(file_path)
+        .arg(file_path.clone())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn() {
@@ -45,10 +45,17 @@ pub fn save_file(
         };
 
     let size_transferred = field
-        .fold(0i64, move |acc, bytes| {
+        // accumulator: (file_path, 0i64) is `acc`
+        .fold((file_path, 0i64), move |acc, bytes| {
+            // Pipe bytestream to stdin (`gsutil`)
             let rt = stdin
                 .write_all(bytes.as_ref())
-                .map(|_| acc + bytes.len() as i64)
+                // write_all consumes the entire stream
+                .map(|_| {
+                    let (_file_path, _file_size) = acc;
+                    // accumulate bytes transferred and return acc tuple
+                    (_file_path, _file_size + bytes.len() as i64)
+                })
                 .map_err(|e| {
                     error!("stdin.write_all failed: {:?}", e);
                     error::MultipartError::Payload(error::PayloadError::Io(e))
@@ -56,18 +63,20 @@ pub fn save_file(
             future::result(rt)
         })
         .map_err(|e| error::ErrorInternalServerError(e));
+
     Box::new(size_transferred)
 }
 
 
 pub fn handle_multipart_item(
     item: multipart::MultipartItem<dev::Payload>,
-) -> Box<Stream<Item = i64, Error = Error>> {
+) -> Box<Stream<Item = (String, i64), Error = Error>> {
 
     match item {
         multipart::MultipartItem::Field(field) => {
 
             let content_disposition = &field.content_disposition();
+            debug!("content-disposition: {:?}", content_disposition);
             let file_path = match content_disposition {
                 None => "temp.txt".to_string(),
                 Some(f) => match f.get_filename() {
@@ -76,10 +85,7 @@ pub fn handle_multipart_item(
                 },
             };
 
-            Box::new(
-                save_file(file_path, field)
-                .into_stream()
-            )
+            Box::new(save_file(file_path, field).into_stream())
 
         },
         multipart::MultipartItem::Nested(mp) => {
@@ -93,6 +99,21 @@ pub fn handle_multipart_item(
 }
 
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UploadResponse {
+    filename: String,
+    filesize: i64,
+}
+impl UploadResponse {
+    fn new(filename: String, filesize: i64) -> Self {
+        UploadResponse {
+            filename: filename,
+            filesize: filesize,
+        }
+    }
+}
+
+
 pub fn upload(req: HttpRequest<AppState>) -> Box<Future<Item=HttpResponse, Error=Error>> {
 
     let res = req.multipart()
@@ -100,10 +121,17 @@ pub fn upload(req: HttpRequest<AppState>) -> Box<Future<Item=HttpResponse, Error
         .map(handle_multipart_item)
         .flatten()
         .collect()
-        .map(|sizes| HttpResponse::Ok().json(json!({
-            "sizes": sizes,
-            "filename": format!("gs://electric-assets/")
-        })))
+        .map(|upload_resp: Vec<(String, i64)>| {
+
+            let resp = upload_resp
+                .iter()
+                .map(|(fname, fsize)| UploadResponse::new(fname.to_owned(), fsize.to_owned()))
+                .collect::<Vec<UploadResponse>>();
+
+            HttpResponse::Ok().json(json!({
+                "body": resp,
+            }))
+        })
         .map_err(|e| {
             error!("failed: {}", e);
             e
@@ -136,6 +164,7 @@ fn stream_to_gcloud(bytestream: &[u8], destination: &str) {
         Ok(_) => println!("`| gsutil cp - {}` responded with: {:?}", &destination, s),
     }
 }
+
 
 
 

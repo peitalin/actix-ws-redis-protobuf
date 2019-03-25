@@ -80,7 +80,10 @@ use subscriptions::{
     BroadcastUpdateProto,
 };
 mod multipart_raw;
-use multipart_raw::upload;
+use multipart_raw::{
+    upload,
+    handle_multipart_item,
+};
 
 
 pub struct AppState {
@@ -196,7 +199,6 @@ struct JsonResponse {
     request: MyObj,
     protobuf_response: Option<Vec<u8>>,
 }
-
 
 
 
