@@ -33,6 +33,8 @@ pub fn save_file(
 ) -> Box<Future<Item = (String, i64), Error = Error>> {
 
     let mut stdin = match std::process::Command::new("gsutil")
+        .arg("-h")
+        .arg(format!("Content-Type:{}", &field.content_type()))
         .arg("cp")
         .arg("-")
         .arg(file_path.clone())
@@ -47,17 +49,17 @@ pub fn save_file(
     let size_transferred = field
         // accumulator: (file_path, 0i64) is `acc`
         .fold((file_path, 0i64), move |acc, bytes| {
-            // Pipe bytestream to stdin (`gsutil`)
+            // Pipe/write bytestream to stdin (`gsutil`)
             let rt = stdin
-                .write_all(bytes.as_ref())
-                // write_all consumes the entire stream
+                .write(bytes.as_ref())
+                // write consumes the stream
                 .map(|_| {
                     let (_file_path, _file_size) = acc;
                     // accumulate bytes transferred and return acc tuple
                     (_file_path, _file_size + bytes.len() as i64)
                 })
                 .map_err(|e| {
-                    error!("stdin.write_all failed: {:?}", e);
+                    error!("stdin.write failed: {:?}", e);
                     error::MultipartError::Payload(error::PayloadError::Io(e))
                 });
             future::result(rt)
@@ -77,11 +79,18 @@ pub fn handle_multipart_item(
 
             let content_disposition = &field.content_disposition();
             debug!("content-disposition: {:?}", content_disposition);
+
             let file_path = match content_disposition {
-                None => "temp.txt".to_string(),
                 Some(f) => match f.get_filename() {
                     Some(filename) => format!("gs://electric-assets/{}", filename),
-                    None => "temp.txt".to_string(),
+                    None => {
+                        error!("No filename in {:?}", &field);
+                        "temp.txt".to_string()
+                    },
+                },
+                None => {
+                    error!("No filename in {:?}", &field);
+                    "temp.txt".to_string()
                 },
             };
 
@@ -101,13 +110,16 @@ pub fn handle_multipart_item(
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UploadResponse {
-    filename: String,
+    filepath: String,
+    filelink: String,
     filesize: i64,
 }
 impl UploadResponse {
-    fn new(filename: String, filesize: i64) -> Self {
+    fn new(filepath: String, filesize: i64) -> Self {
+        let filelink = filepath.replace("gs://", "http://storage.googleapis.com/");
         UploadResponse {
-            filename: filename,
+            filepath: filepath,
+            filelink: filelink,
             filesize: filesize,
         }
     }
@@ -125,7 +137,7 @@ pub fn upload(req: HttpRequest<AppState>) -> Box<Future<Item=HttpResponse, Error
 
             let resp = upload_resp
                 .iter()
-                .map(|(fname, fsize)| UploadResponse::new(fname.to_owned(), fsize.to_owned()))
+                .map(|(fpath, fsize)| UploadResponse::new(fpath.to_owned(), fsize.to_owned()))
                 .collect::<Vec<UploadResponse>>();
 
             HttpResponse::Ok().json(json!({

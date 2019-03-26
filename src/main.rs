@@ -206,12 +206,10 @@ struct JsonResponse {
 
 
 
-
 fn main() {
     ::std::env::set_var("RUST_LOG", "actix_web=debug,proto");
     pretty_env_logger::init();
 
-    // stream_to_gcloud("to be or not to be?".as_ref(), "gs://electric-assets/hamlet.txt");
 
     let sys = actix::System::new("protobuf-example");
     server::new(|| {
@@ -231,12 +229,12 @@ fn main() {
                     .allowed_origin("http://localhost:8080")
                     .allowed_origin("http://127.0.0.1:8080")
                     .allowed_origin("exp://10.0.0.60:19000")
-                    .allowed_methods(vec!["GET", "POST"])
-                    .allowed_headers(vec![
-                        http::header::ACCEPT,
-                        http::header::CONTENT_TYPE,
-                        http::header::AUTHORIZATION,
-                    ])
+                    .allowed_methods(vec!["GET", "POST", "OPTIONS"])
+                    // .allowed_headers(vec![
+                    //     http::header::ACCEPT,
+                    //     http::header::CONTENT_TYPE,
+                    //     http::header::AUTHORIZATION,
+                    // ])
                     .resource("/ws/", |r| r.method(http::Method::GET).f(ws_handshake_handler))
                     .resource("/ws/pb/pb/stuff", |r| r.method(http::Method::POST).with_async(protobuf_to_protobuf_ws))
                     .resource("/ws/json/pb/stuff", |r| r.method(http::Method::POST).with_async(json_to_protobuf_ws))
