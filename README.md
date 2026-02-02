@@ -1,11 +1,21 @@
 # actix-ws-redis-protobuf
 
+Actix Web WebSocket broadcast hub with optional Protobuf and Redis integration.
 
-Examples for JSON -> protobuf, JSON -> JSON, protobuf -> protobuf.
+## Run the example server
 
-Start the rust server with `cargo run`.
-Then start a `redis-server` and the redis client with `redis-cli` on a different terminal tab. Subscribe to events on redis-cli with `subscribe events`.
+- JSON → WS text broadcast:
+  - `cargo run --bin server`
+  - `python3 client.py`
+- Enable Protobuf endpoints:
+  - `cargo run --features protobuf --bin server`
+  - `python3 client_proto.py`
+- Enable Redis subscribe/publish (binary payloads on a channel):
+  - `REDIS_URL=redis://127.0.0.1/ REDIS_CHANNEL=events cargo run --features redis --bin server`
 
-Once the rust protobuf-websocket server and `redis-server` are running, and `redis-cli` is subscribed to `events`, you may run 
-`python3 client.py` to see the examples.
+## Endpoints (server)
 
+- `GET /ws/` WebSocket endpoint (broadcasts incoming client text/binary to all connected clients)
+- `POST /ws/json/json/stuff` accepts JSON and broadcasts JSON as WS text
+- `POST /ws/json/pb/stuff` (feature `protobuf`) accepts JSON and broadcasts protobuf as WS binary
+- `POST /ws/pb/pb/stuff` (feature `protobuf`) accepts protobuf and broadcasts protobuf as WS binary
